@@ -33,7 +33,7 @@ function save() {
 
 const $ = (id) => document.getElementById(id);
 const els = {};
-['micBtn','micHint','meter','timer','stage','resultCard','resultText','copyBtn','copiedTag','raw',
+['micBtn','micHint','meter','timer','stage','resultCard','resultText','copyBtn','copiedTag','raw','shareBtn',
  'historySec','history','settings','settingsBtn','closeSettings','toast','apiKey','language',
  'vocabulary','refineEnabled','removeFillers','refineModel','fetchModels','modelList','autoCopy',
  'clearHistory','selfUrl'].forEach(id => els[id] = $(id));
@@ -458,6 +458,12 @@ function init() {
 
   els.copyBtn.addEventListener('click', () => copy(els.resultText.textContent));
 
+  // 共有シート経由なら、テキストを受け取れるアプリ（日記など）へ直接渡せる
+  els.shareBtn.hidden = !navigator.share;
+  els.shareBtn.addEventListener('click', () => {
+    navigator.share({ text: els.resultText.textContent }).catch(() => {});
+  });
+
   els.raw.addEventListener('click', () => {
     const showingRaw = els.raw.dataset.on === '1';
     if (!showingRaw) els.raw.dataset.refined = els.resultText.textContent;
@@ -473,7 +479,7 @@ function init() {
   }
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=1').catch(() => {});
+    navigator.serviceWorker.register('sw.js?v=2').catch(() => {});
   }
 }
 
