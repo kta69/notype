@@ -1,0 +1,15 @@
+{
+  "name": "NoType",
+  "short_name": "NoType",
+  "description": "高精度の音声入力。喋る → 文字起こし → コピー。",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0b0c",
+  "theme_color": "#0b0b0c",
+  "icons": [
+    { "src": "icon.png?v=1", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon.png?v=1", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>NoType</title>
+<meta name="theme-color" content="#0b0b0c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="NoType">
+<link rel="manifest" href="manifest.json?v=1">
+<link rel="apple-touch-icon" href="icon.png?v=1">
+<link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+
+<header>
+  <h1>NoType</h1>
+  <button id="settingsBtn" class="icon" aria-label="設定">設定</button>
+</header>
+
+<main>
+  <section id="recPanel">
+    <button id="micBtn" class="mic" aria-label="録音">
+      <span class="micIcon"></span>
+    </button>
+    <div id="micHint" class="hint">タップして録音開始</div>
+    <div id="meter" class="meter" hidden>
+      <div class="bars">
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+      </div>
+      <div id="timer" class="timer">0:00</div>
+    </div>
+    <div id="stage" class="stage" hidden></div>
+  </section>
+
+  <section id="resultCard" class="card" hidden>
+    <div class="cardHead">
+      <span class="label">認識結果</span>
+      <span id="copiedTag" class="tag" hidden>コピー済み</span>
+    </div>
+    <p id="resultText" class="result"></p>
+    <div class="row">
+      <button id="copyBtn" class="btn primary">コピー</button>
+      <button id="raw" class="btn ghost" hidden>整形前を見る</button>
+    </div>
+  </section>
+
+  <section id="historySec" hidden>
+    <h2>履歴</h2>
+    <ul id="history" class="history"></ul>
+  </section>
+</main>
+
+<div id="settings" class="sheet" hidden>
+  <div class="sheetHead">
+    <h2>設定</h2>
+    <button id="closeSettings" class="icon">閉じる</button>
+  </div>
+  <div class="sheetBody">
+
+    <label class="field">
+      <span class="fLabel">Groq API キー</span>
+      <input id="apiKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="gsk_...">
+      <span class="fNote">console.groq.com で無料で発行できます。キーはこの端末の中だけに保存され、どこにも送信されません（Groq を除く）。</span>
+    </label>
+
+    <label class="field">
+      <span class="fLabel">言語</span>
+      <select id="language">
+        <option value="ja">日本語</option>
+        <option value="en">英語</option>
+        <option value="">自動判定</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span class="fLabel">固有名詞・専門用語</span>
+      <textarea id="vocabulary" rows="4" placeholder="杉山恵太、e1RM、インクラインダンベルプレス"></textarea>
+      <span class="fNote">読点区切りで並べてください。認識と整形の両方に渡され、同音異義語の誤変換が大きく減ります。<strong>ここが一番効きます。</strong></span>
+    </label>
+
+    <label class="toggle">
+      <input id="refineEnabled" type="checkbox">
+      <span>AI で整形する（漢字変換ミス・句読点）</span>
+    </label>
+
+    <label class="toggle sub">
+      <input id="removeFillers" type="checkbox">
+      <span>「えー」「あの」を削除</span>
+    </label>
+
+    <label class="field sub">
+      <span class="fLabel">整形モデル</span>
+      <div class="row">
+        <input id="refineModel" type="text" autocapitalize="off" spellcheck="false">
+        <button id="fetchModels" class="btn ghost">一覧</button>
+      </div>
+      <select id="modelList" hidden></select>
+      <span class="fNote">同じ Groq の無料枠を使います。追加費用はかかりません。</span>
+    </label>
+
+    <label class="toggle">
+      <input id="autoCopy" type="checkbox">
+      <span>結果を自動でコピーする</span>
+    </label>
+
+    <div class="field">
+      <span class="fLabel">使い方</span>
+      <ol class="howto">
+        <li>ホーム画面に追加してアプリとして開く（Safari の共有 → ホーム画面に追加）</li>
+        <li>ショートカット App で「URLを開く」に <code id="selfUrl"></code> を設定</li>
+        <li>そのショートカットをアクションボタン、または 設定 &gt; アクセシビリティ &gt; タッチ &gt; 背面タップ に割り当てる</li>
+        <li>押す → 自動で録音開始 → 喋る → 停止 → 結果がコピーされる</li>
+      </ol>
+    </div>
+
+    <button id="clearHistory" class="btn danger">履歴を消去</button>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="app.js?v=1"></script>
+</body>
+</html>
