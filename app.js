@@ -356,14 +356,30 @@ function remember(text) {
 function renderHistory() {
   els.historySec.hidden = S.history.length === 0;
   els.history.innerHTML = '';
-  S.history.forEach((h) => {
+  S.history.forEach((h, i) => {
     const li = document.createElement('li');
-    li.textContent = h.text;
-    li.addEventListener('click', () => {
+
+    const text = document.createElement('span');
+    text.className = 'hText';
+    text.textContent = h.text;
+    text.addEventListener('click', () => {
       lastRaw = '';
       show(h.text);
       copy(h.text);
     });
+
+    const del = document.createElement('button');
+    del.className = 'hDel';
+    del.type = 'button';
+    del.setAttribute('aria-label', 'この履歴を削除');
+    del.textContent = '×';
+    del.addEventListener('click', () => {
+      S.history.splice(i, 1);
+      save();
+      renderHistory();
+    });
+
+    li.append(text, del);
     els.history.appendChild(li);
   });
 }
@@ -479,7 +495,7 @@ function init() {
   }
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=2').catch(() => {});
+    navigator.serviceWorker.register('sw.js?v=3').catch(() => {});
   }
 }
 

@@ -1,11 +1,11 @@
-const CACHE = 'notype-v2';
+const CACHE = 'notype-v3';
 const SHELL = [
   './',
-  './index.html?v=2',
-  './styles.css?v=2',
-  './app.js?v=2',
-  './manifest.json?v=2',
-  './icon.png?v=2',
+  './index.html?v=3',
+  './styles.css?v=3',
+  './app.js?v=3',
+  './manifest.json?v=3',
+  './icon.png?v=3',
 ];
 
 self.addEventListener('install', e => {
@@ -38,6 +38,6 @@ self.addEventListener('fetch', e => {
         caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
         return res;
       })
-      .catch(() => caches.match(req).then(hit => hit || caches.match('./index.html?v=2')))
+      .catch(() => caches.match(req).then(hit => hit || caches.match('./index.html?v=3')))
   );
 });
