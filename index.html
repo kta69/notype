@@ -8,9 +8,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="NoType">
-<link rel="manifest" href="manifest.json?v=3">
-<link rel="apple-touch-icon" href="icon.png?v=3">
-<link rel="stylesheet" href="styles.css?v=3">
+<link rel="manifest" href="manifest.json?v=4">
+<link rel="apple-touch-icon" href="icon.png?v=4">
+<link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
 
@@ -116,12 +116,22 @@
       </ol>
     </div>
 
+    <div class="field">
+      <span class="fLabel">バックアップ</span>
+      <div class="row">
+        <button id="exportBtn" class="btn">書き出す</button>
+        <button id="importBtn" class="btn">読み込む</button>
+      </div>
+      <input id="importFile" type="file" accept="application/json,.json" hidden>
+      <span class="fNote">設定と履歴を1つのファイルに保存します。iOS がこのサイトのデータを消してしまっても、これがあれば戻せます。</span>
+    </div>
+
     <button id="clearHistory" class="btn danger">履歴を消去</button>
   </div>
 </div>
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

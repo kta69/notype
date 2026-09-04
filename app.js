@@ -16,6 +16,7 @@ const DEFAULTS = {
   refineModel: 'openai/gpt-oss-120b',
   autoCopy: true,
   history: [],
+  last: null,
 };
 
 let S = load();
@@ -36,7 +37,7 @@ const els = {};
 ['micBtn','micHint','meter','timer','stage','resultCard','resultText','copyBtn','copiedTag','raw','shareBtn',
  'historySec','history','settings','settingsBtn','closeSettings','toast','apiKey','language',
  'vocabulary','refineEnabled','removeFillers','refineModel','fetchModels','modelList','autoCopy',
- 'clearHistory','selfUrl'].forEach(id => els[id] = $(id));
+ 'clearHistory','selfUrl','exportBtn','importBtn','importFile'].forEach(id => els[id] = $(id));
 
 const bars = [...document.querySelectorAll('.bars i')];
 
@@ -169,17 +170,24 @@ function stopMeter() {
 
 /* ---------------- 文字起こし ---------------- */
 
+/* Groq の prompt は 224 トークンまで。長すぎると無視されるか、
+   そのまま出力に混ざる。安全側に切り詰める。 */
+function promptTerms() {
+  return S.vocabulary.trim().slice(0, 200);
+}
+
 async function transcribe(blob) {
   const ext = (blob.type || '').includes('webm') ? 'webm' : 'm4a';
   const fd = new FormData();
   fd.append('file', blob, 'audio.' + ext);
   fd.append('model', ASR_MODEL);
-  fd.append('response_format', 'json');
+  // verbose_json にするとセグメントごとの信頼度が返る。幻聴の検出に必要。
+  fd.append('response_format', 'verbose_json');
   fd.append('temperature', '0');
   if (S.language) fd.append('language', S.language);
 
   // 用語集を Whisper のプロンプトに渡すと、同音異義語がその語彙に引き寄せられる。
-  const terms = S.vocabulary.trim();
+  const terms = promptTerms();
   if (terms) fd.append('prompt', terms);
 
   const res = await fetch(`${GROQ}/audio/transcriptions`, {
@@ -190,7 +198,81 @@ async function transcribe(blob) {
 
   if (!res.ok) throw new Error(await errorMessage(res));
   const json = await res.json();
-  return clean(json.text || '');
+
+  return {
+    text: clean(sanitize(json, terms)),
+    heard: clean(json.text || ''),
+  };
+}
+
+/* ---------------- 幻聴の除去 ----------------
+   Whisper は無音・雑音区間で、実際には言っていない定型文を作る。
+   verbose_json のセグメント統計と既知の定型文で機械的に落とす。 */
+
+function norm(s) {
+  return (s || '').replace(/[\s。、．，!！?？…・「」『』()（）\-‐―ー~〜]/g, '');
+}
+
+// 学習データ（字幕）由来で、無音時に湧いて出る定型文
+const HALLUCINATIONS = [
+  'ご視聴ありがとうございました',
+  'ご視聴ありがとうございます',
+  '最後までご視聴いただきありがとうございました',
+  'ご覧いただきありがとうございます',
+  'チャンネル登録よろしくお願いします',
+  'チャンネル登録お願いします',
+  '高評価とチャンネル登録をお願いします',
+  '字幕視聴ありがとうございました',
+  'エンディング',
+  'Thanksforwatching',
+  'Thankyouforwatching',
+  'SubtitlesbytheAmaraorgcommunity',
+].map(norm);
+
+function isHallucination(text) {
+  const n = norm(text);
+  return !n || HALLUCINATIONS.includes(n);
+}
+
+function usableSegment(seg) {
+  const noSpeech = seg.no_speech_prob ?? 0;
+  const logprob = seg.avg_logprob ?? 0;
+  const ratio = seg.compression_ratio ?? 1.66;
+
+  if (noSpeech > 0.6 && logprob < -1.0) return false; // 無音区間に文を作った
+  if (ratio > 2.4) return false;                      // 同じ語のループ
+  if (logprob < -1.4) return false;                   // 極端に自信がない
+  if (isHallucination(seg.text)) return false;
+  return true;
+}
+
+function sanitize(json, terms) {
+  const segs = Array.isArray(json.segments) ? json.segments : null;
+  let text;
+
+  if (segs && segs.length) {
+    const kept = [];
+    let prev = '';
+    for (const seg of segs) {
+      if (!usableSegment(seg)) continue;
+      const t = (seg.text || '').trim();
+      if (!t || norm(t) === prev) continue; // 直前と同一の繰り返しを畳む
+      prev = norm(t);
+      kept.push(t);
+    }
+    text = kept.join('');
+  } else {
+    text = (json.text || '').trim();
+  }
+
+  if (isHallucination(text)) return '';
+
+  // 用語集をそのまま吐き返してくることがある
+  if (terms) {
+    if (norm(text) === norm(terms)) return '';
+    if (text.startsWith(terms)) text = text.slice(terms.length).trim();
+  }
+  return text;
 }
 
 /* 日本語の文字どうしに挟まった半角スペースを除去する */
@@ -278,8 +360,9 @@ async function finish() {
       throw new Error('音声が短すぎます');
     }
 
-    let text = await transcribe(blob);
-    lastRaw = text;
+    const result = await transcribe(blob);
+    lastRaw = result.heard;
+    let text = result.text;
 
     if (S.refineEnabled && text) {
       els.stage.textContent = 'AI で整形中…';
@@ -291,10 +374,11 @@ async function finish() {
     }
 
     resolveText(text);
-    if (!text) throw new Error('何も聞き取れませんでした');
+    if (!text) throw new Error('うまく聞き取れませんでした。もう一度話してください');
 
-    show(text);
+    // 保存を先に済ませる。描画で何が起きても記録だけは残す。
     remember(text);
+    show(text);
     if (S.autoCopy && !clipboardTried) copy(text);
   } catch (e) {
     resolveText('');
@@ -307,14 +391,19 @@ async function finish() {
   }
 }
 
-function show(text) {
+function show(text, quiet) {
   els.resultText.textContent = text;
   els.resultCard.hidden = false;
   els.raw.hidden = !(S.refineEnabled && lastRaw && lastRaw !== text);
   els.raw.dataset.on = '';
   els.raw.textContent = '整形前を見る';
   els.copiedTag.hidden = true;
-  els.resultCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  // 画面に出したものは必ず保存する。放置してタブが再読み込みされても消えない。
+  S.last = { text, heard: lastRaw };
+  save();
+
+  if (!quiet) els.resultCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 /* ---------------- クリップボード ---------------- */
@@ -424,6 +513,36 @@ function bindSettings() {
     toast('履歴を消去しました');
   });
 
+  // iOS はサイトのデータを勝手に消すことがある。手元にファイルで逃がせるようにする。
+  els.exportBtn.addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `notype-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  els.importBtn.addEventListener('click', () => els.importFile.click());
+
+  els.importFile.addEventListener('change', async () => {
+    const file = els.importFile.files[0];
+    els.importFile.value = '';
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      if (!data || typeof data !== 'object') throw new Error();
+      S = Object.assign({}, DEFAULTS, data);
+      save();
+      renderHistory();
+      openSettings();
+      toast('読み込みました');
+    } catch {
+      toast('このファイルは読めませんでした', true);
+    }
+  });
+
   // モデル ID は時々変わるので、実際に使えるものを API から取ってくる
   els.fetchModels.addEventListener('click', async () => {
     if (!S.apiKey) { toast('先に API キーを入れてください', true); return; }
@@ -464,8 +583,17 @@ function toast(message, isError) {
 /* ---------------- 起動 ---------------- */
 
 function init() {
+  // ホーム画面アプリなら iOS の自動データ削除の対象外になる
+  navigator.storage?.persist?.().catch(() => {});
+
   bindSettings();
   renderHistory();
+
+  // 前回の結果を復元する（放置してタブが破棄されても残る）
+  if (S.last?.text) {
+    lastRaw = S.last.heard || '';
+    show(S.last.text, true);
+  }
 
   els.micBtn.addEventListener('click', () => {
     if (recording) finish();
@@ -495,7 +623,7 @@ function init() {
   }
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=3').catch(() => {});
+    navigator.serviceWorker.register('sw.js?v=4').catch(() => {});
   }
 }
 
