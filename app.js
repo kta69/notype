@@ -37,7 +37,8 @@ const els = {};
 ['micBtn','micHint','meter','timer','stage','resultCard','resultText','copyBtn','copiedTag','raw','shareBtn',
  'historySec','history','settings','settingsBtn','closeSettings','toast','apiKey','language',
  'vocabulary','refineEnabled','removeFillers','refineModel','fetchModels','modelList','autoCopy',
- 'clearHistory','selfUrl','exportBtn','importBtn','importFile'].forEach(id => els[id] = $(id));
+ 'clearHistory','selfUrl','exportBtn','importBtn','importFile',
+ 'pendingCard','pendingList'].forEach(id => els[id] = $(id));
 
 const bars = [...document.querySelectorAll('.bars i')];
 
@@ -166,6 +167,132 @@ function stopMeter() {
   cancelAnimationFrame(meterRAF);
   bars.forEach(b => { b.style.height = '4px'; b.style.opacity = 0.35; });
   if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+}
+
+/* ---------------- 録音の保管 ----------------
+   一度録った音は、文字起こしが失敗しても捨てない。
+   localStorage は Blob を持てないので IndexedDB に置く。
+   文字起こしが成功した時点で初めて消す。 */
+
+const DB_NAME = 'notype';
+const STORE = 'audio';
+const KEEP_MAX = 10;
+
+let pending = [];      // [{ at, blob }] 新しい順。未変換の録音。
+let pendingUrls = [];
+
+let dbPromise = null;
+function openDB() {
+  // 接続は開きっぱなしで使い回す。毎回開くと接続が溜まる。
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'at' });
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  return dbPromise;
+}
+
+async function tx(mode, run) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const t = db.transaction(STORE, mode);
+    const req = run(t.objectStore(STORE));
+    t.oncomplete = () => resolve(req ? req.result : undefined);
+    t.onerror = () => reject(t.error);
+  });
+}
+
+/* 録音直後に呼ぶ。ここから先で何が失敗しても音は残る。 */
+async function keepAudio(blob) {
+  const item = { at: Date.now(), blob };
+  pending.unshift(item);
+  const overflow = pending.splice(KEEP_MAX);
+  try {
+    await tx('readwrite', s => {
+      s.put(item);
+      overflow.forEach(o => s.delete(o.at));
+    });
+  } catch { /* IndexedDB が使えなくても録音〜文字起こしは続行する */ }
+  return item;
+}
+
+async function dropAudio(at) {
+  pending = pending.filter(p => p.at !== at);
+  renderPending();
+  try {
+    await tx('readwrite', s => s.delete(at));
+  } catch { /* 消せなくても実害はない */ }
+}
+
+async function loadPending() {
+  try {
+    const all = await tx('readonly', s => s.getAll());
+    pending = (all || []).sort((a, b) => b.at - a.at).slice(0, KEEP_MAX);
+  } catch {
+    pending = [];
+  }
+  renderPending();
+}
+
+function recTime(at) {
+  const d = new Date(at);
+  const m = `${d.getMonth() + 1}/${d.getDate()}`;
+  return `${m} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')} の録音`;
+}
+
+function renderPending() {
+  pendingUrls.forEach(URL.revokeObjectURL);
+  pendingUrls = [];
+  els.pendingList.innerHTML = '';
+  els.pendingCard.hidden = pending.length === 0;
+
+  for (const item of pending) {
+    const url = URL.createObjectURL(item.blob);
+    pendingUrls.push(url);
+
+    const li = document.createElement('li');
+
+    const when = document.createElement('span');
+    when.className = 'pendAt';
+    when.textContent = recTime(item.at);
+
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.preload = 'metadata';
+    audio.src = url;
+
+    const retry = document.createElement('button');
+    retry.className = 'btn primary';
+    retry.type = 'button';
+    retry.textContent = 'もう一度文字起こし';
+    retry.addEventListener('click', () => retryAudio(item));
+
+    const del = document.createElement('button');
+    del.className = 'btn ghost';
+    del.type = 'button';
+    del.textContent = '破棄';
+    del.addEventListener('click', () => {
+      if (confirm('この録音を消します。元に戻せません。')) dropAudio(item.at);
+    });
+
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.append(retry, del);
+
+    li.append(when, audio, row);
+    els.pendingList.appendChild(li);
+  }
+}
+
+function retryAudio(item) {
+  if (busy) return;
+  let resolveText;
+  const textPromise = new Promise(r => { resolveText = r; });
+  const clipboardTried = S.autoCopy ? tryAsyncCopy(textPromise) : false;
+  transcribeAndShow(item, resolveText, clipboardTried);
 }
 
 /* ---------------- 文字起こし ---------------- */
@@ -339,8 +466,8 @@ async function errorMessage(res) {
 /* ---------------- パイプライン ---------------- */
 
 async function finish() {
-  const pending = stopRecording();
-  if (!pending) return;
+  const done = stopRecording();
+  if (!done) return;
 
   busy = true;
   els.micBtn.classList.add('busy');
@@ -353,14 +480,27 @@ async function finish() {
   const textPromise = new Promise(r => { resolveText = r; });
   const clipboardTried = S.autoCopy ? tryAsyncCopy(textPromise) : false;
 
-  try {
-    const blob = await pending;
-    if (blob.size < 2000) {
-      resolveText('');
-      throw new Error('音声が短すぎます');
-    }
+  const blob = await done;
+  if (blob.size < 2000) {
+    resolveText('');
+    toast('音声が短すぎます', true);
+    idle();
+    return;
+  }
 
-    const result = await transcribe(blob);
+  // 文字起こしより先に録音を保管する。以降どこで失敗しても録り直しは要らない。
+  const item = await keepAudio(blob);
+  await transcribeAndShow(item, resolveText, clipboardTried);
+}
+
+async function transcribeAndShow(item, resolveText, clipboardTried) {
+  busy = true;
+  els.micBtn.classList.add('busy');
+  els.stage.hidden = false;
+  els.stage.textContent = '文字起こし中…';
+
+  try {
+    const result = await transcribe(item.blob);
     lastRaw = result.heard;
     let text = result.text;
 
@@ -374,21 +514,29 @@ async function finish() {
     }
 
     resolveText(text);
-    if (!text) throw new Error('うまく聞き取れませんでした。もう一度話してください');
+    if (!text) throw new Error('うまく聞き取れませんでした。録音は下に残してあります');
 
     // 保存を先に済ませる。描画で何が起きても記録だけは残す。
     remember(text);
     show(text);
     if (S.autoCopy && !clipboardTried) copy(text);
+
+    // ここまで来て初めて録音を捨てる
+    await dropAudio(item.at);
   } catch (e) {
     resolveText('');
     toast(e.message, true);
+    renderPending();   // 録音は残っている。再試行できることを見せる。
   } finally {
-    busy = false;
-    els.micBtn.classList.remove('busy');
-    els.stage.hidden = true;
-    els.timer.textContent = '0:00';
+    idle();
   }
+}
+
+function idle() {
+  busy = false;
+  els.micBtn.classList.remove('busy');
+  els.stage.hidden = true;
+  els.timer.textContent = '0:00';
 }
 
 function show(text, quiet) {
@@ -589,6 +737,9 @@ function init() {
   bindSettings();
   renderHistory();
 
+  // 前回文字起こしできなかった録音を復元する
+  loadPending();
+
   // 前回の結果を復元する（放置してタブが破棄されても残る）
   if (S.last?.text) {
     lastRaw = S.last.heard || '';
@@ -623,7 +774,7 @@ function init() {
   }
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=4').catch(() => {});
+    navigator.serviceWorker.register('sw.js?v=5').catch(() => {});
   }
 }
 

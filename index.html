@@ -8,9 +8,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="NoType">
-<link rel="manifest" href="manifest.json?v=4">
-<link rel="apple-touch-icon" href="icon.png?v=4">
-<link rel="stylesheet" href="styles.css?v=4">
+<link rel="manifest" href="manifest.json?v=5">
+<link rel="apple-touch-icon" href="icon.png?v=5">
+<link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
 
@@ -32,6 +32,14 @@
       <div id="timer" class="timer">0:00</div>
     </div>
     <div id="stage" class="stage" hidden></div>
+  </section>
+
+  <section id="pendingCard" class="card warn" hidden>
+    <div class="cardHead">
+      <span class="label">未変換の録音</span>
+    </div>
+    <p class="fNote">文字起こしできなかった録音がこの端末に残っています。撮り直さずに、そのままもう一度試せます。</p>
+    <ul id="pendingList" class="pendList"></ul>
   </section>
 
   <section id="resultCard" class="card" hidden>
@@ -132,6 +140,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>
