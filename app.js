@@ -17,6 +17,15 @@ const DEFAULTS = {
   autoCopy: true,
   history: [],
   last: null,
+  // 録音中に見ながら喋るための項目。日記用の初期値。
+  prompts: [
+    '昨日良かったことは？',
+    '昨日できたことは？',
+    '昨日感謝できたことは？',
+    '昨日感じた自分の素直な気持ちは？特にモヤモヤ',
+    'それがあったからこそこれからどうしていく？',
+  ],
+  promptsOpen: true,
 };
 
 let S = load();
@@ -38,7 +47,9 @@ const els = {};
  'historySec','history','settings','settingsBtn','closeSettings','toast','apiKey','language',
  'vocabulary','refineEnabled','removeFillers','refineModel','fetchModels','modelList','autoCopy',
  'clearHistory','selfUrl','exportBtn','importBtn','importFile',
- 'pendingCard','pendingList'].forEach(id => els[id] = $(id));
+ 'pendingCard','pendingList',
+ 'promptCard','promptToggle','promptChev','promptEdit','promptBody','promptList','promptAdd']
+  .forEach(id => els[id] = $(id));
 
 const bars = [...document.querySelectorAll('.bars i')];
 
@@ -581,6 +592,94 @@ async function copy(text) {
   }
 }
 
+/* ---------------- 話す項目 ----------------
+   録音しながら見るためのメモ。日記の問いを並べておく。 */
+
+let promptEditing = false;
+
+function renderPrompts() {
+  els.promptList.innerHTML = '';
+  const sizers = [];
+
+  S.prompts.forEach((text, i) => {
+    const li = document.createElement('li');
+
+    if (promptEditing) {
+      li.className = 'edit';
+
+      const ta = document.createElement('textarea');
+      ta.rows = 1;
+      ta.value = text;
+      // scrollHeight は枠線を含まないので、border-box の分を足し戻す
+      const grow = () => {
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + (ta.offsetHeight - ta.clientHeight) + 'px';
+      };
+      ta.addEventListener('input', () => { S.prompts[i] = ta.value; save(); grow(); });
+      sizers.push(grow);
+
+      const del = document.createElement('button');
+      del.className = 'hDel';
+      del.type = 'button';
+      del.setAttribute('aria-label', 'この項目を削除');
+      del.textContent = '×';
+      del.addEventListener('click', () => {
+        S.prompts.splice(i, 1);
+        save();
+        renderPrompts();
+      });
+
+      li.append(ta, del);
+    } else {
+      li.textContent = text;
+    }
+
+    els.promptList.appendChild(li);
+  });
+
+  if (!promptEditing && S.prompts.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'promptEmpty';
+    empty.textContent = '「編集」から項目を追加できます。';
+    els.promptList.appendChild(empty);
+  }
+
+  els.promptAdd.hidden = !promptEditing;
+  els.promptEdit.textContent = promptEditing ? '完了' : '編集';
+  els.promptBody.hidden = !S.promptsOpen;
+  els.promptChev.classList.toggle('up', S.promptsOpen);
+
+  // 高さ合わせは DOM に入れて表示状態を決めた後でないと測れない
+  sizers.forEach(grow => grow());
+}
+
+function bindPrompts() {
+  els.promptToggle.addEventListener('click', () => {
+    S.promptsOpen = !S.promptsOpen;
+    save();
+    renderPrompts();
+  });
+
+  els.promptEdit.addEventListener('click', () => {
+    promptEditing = !promptEditing;
+    if (promptEditing) {
+      S.promptsOpen = true;
+    } else {
+      // 空のまま残った項目は捨てる
+      S.prompts = S.prompts.map(p => p.trim()).filter(Boolean);
+    }
+    save();
+    renderPrompts();
+  });
+
+  els.promptAdd.addEventListener('click', () => {
+    S.prompts.push('');
+    save();
+    renderPrompts();
+    els.promptList.querySelector('li:last-child textarea')?.focus();
+  });
+}
+
 /* ---------------- 履歴 ---------------- */
 
 function remember(text) {
@@ -684,6 +783,7 @@ function bindSettings() {
       S = Object.assign({}, DEFAULTS, data);
       save();
       renderHistory();
+      renderPrompts();
       openSettings();
       toast('読み込みました');
     } catch {
@@ -735,6 +835,8 @@ function init() {
   navigator.storage?.persist?.().catch(() => {});
 
   bindSettings();
+  bindPrompts();
+  renderPrompts();
   renderHistory();
 
   // 前回文字起こしできなかった録音を復元する
@@ -774,7 +876,7 @@ function init() {
   }
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js?v=5').catch(() => {});
+    navigator.serviceWorker.register('sw.js?v=6').catch(() => {});
   }
 }
 

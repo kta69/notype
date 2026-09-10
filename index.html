@@ -8,9 +8,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="NoType">
-<link rel="manifest" href="manifest.json?v=5">
-<link rel="apple-touch-icon" href="icon.png?v=5">
-<link rel="stylesheet" href="styles.css?v=5">
+<link rel="manifest" href="manifest.json?v=6">
+<link rel="apple-touch-icon" href="icon.png?v=6">
+<link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
 
@@ -32,6 +32,20 @@
       <div id="timer" class="timer">0:00</div>
     </div>
     <div id="stage" class="stage" hidden></div>
+  </section>
+
+  <section id="promptCard" class="card">
+    <div class="cardHead">
+      <button id="promptToggle" class="headBtn" type="button">
+        <span class="label">話す項目</span>
+        <span id="promptChev" class="chev up"></span>
+      </button>
+      <button id="promptEdit" class="icon" type="button">編集</button>
+    </div>
+    <div id="promptBody">
+      <ol id="promptList" class="promptList"></ol>
+      <button id="promptAdd" class="btn ghost wide" type="button" hidden>＋ 項目を追加</button>
+    </div>
   </section>
 
   <section id="pendingCard" class="card warn" hidden>
@@ -140,6 +154,6 @@
 
 <div id="toast" class="toast" hidden></div>
 
-<script src="app.js?v=5"></script>
+<script src="app.js?v=6"></script>
 </body>
 </html>
