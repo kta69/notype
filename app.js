@@ -423,23 +423,96 @@ function clean(text) {
 
 /* ---------------- AI 整形 ---------------- */
 
-async function refine(text) {
+/* 書き直しではなく校正を頼む指示。足すことを一つずつ禁じてある。 */
+function refinePrompt() {
   const rules = [
-    'あなたは日本語音声認識の後処理エンジンです。入力は音声認識の生テキストです。',
-    '次の方針で修正し、修正後の本文だけを出力してください。説明・前置き・引用符は一切付けないこと。',
-    '1. 同音異義語の誤変換を文脈から正しい漢字に直す。',
-    '2. 句読点と改行を自然に補う。',
-    '3. 話者の言い回しや語尾は変えない。要約や意訳は禁止。内容を足さない。',
-    '4. 英数字・固有名詞の表記を正す。',
+    'あなたは日本語の音声認識テキストの校正者です。入力は音声認識の生テキストです。',
+    '文章を書き直すのではなく、明らかな誤りだけを直してください。出力は修正後の本文だけです。',
+    '',
+    '直してよいもの:',
+    '- 同音異義語や誤変換を、文脈から正しい表記に直す',
+    '- 句読点と改行を補う',
+    '- 英数字・固有名詞の表記を整える',
+    '',
+    'してはいけないこと:',
+    '- 文・節・語句を新しく足す。読みやすくするための補足も禁止',
+    '- 語尾や言い回しを変える。話し言葉は話し言葉のまま残す',
+    '- 助詞を補う。「ご飯作って」を「ご飯を作って」にしない',
+    '- 文法やら抜き言葉を正す。「起きれた」は「起きれた」のまま',
+    '- 言い換え、要約、意訳、敬体と常体の変更',
+    '- 言い差しや途中で終わった文を補って完成させる。不完全なまま残すこと',
+    '- 事実・数字・日付・固有名詞を推測で補う',
+    '- 前置き、後書き、見出し、箇条書きへの整理、引用符、コードブロック',
+    '',
+    '入力が短ければ出力も短いままにします。直すところが無ければ入力をそのまま返してください。',
   ];
   if (S.removeFillers) {
-    rules.push('5. 「えー」「あの」「まあ」などのフィラーと明らかな言い直しを削除する。');
+    rules.push('「えー」「あの」「まあ」などのフィラーと、明らかな言い直しは削除してください。');
   }
   const terms = S.vocabulary.trim();
   if (terms) {
+    rules.push('');
     rules.push('以下は話者がよく使う固有名詞・専門用語です。該当しそうな箇所はこの表記に合わせること。');
     rules.push(terms);
   }
+  return rules.join('\n');
+}
+
+/* 応答に紛れ込む前置き・引用符・コードブロックを剥がす */
+function unwrap(raw) {
+  let s = raw.trim();
+
+  if (s.startsWith('```')) {
+    const lines = s.split('\n');
+    lines.shift();
+    if (lines[lines.length - 1]?.trim().startsWith('```')) lines.pop();
+    s = lines.join('\n').trim();
+  }
+
+  // 「以下が修正後の文章です：」のような行だけを落とす。
+  // 「以下の件について話します。」は本文なので、修正・校正の語が要ると縛る。
+  const lines = s.split('\n');
+  const PREAMBLE = /^(以下|こちら)?.{0,10}(修正|校正|整形|訂正)(後|版|した|しました)?.{0,10}(です|ます|になります)?[：:。]?$/;
+  if (lines.length > 1 && PREAMBLE.test(lines[0].trim())) {
+    s = lines.slice(1).join('\n').trim();
+  }
+
+  // 全体が囲まれているときだけ外す
+  for (const [open, close] of [['「', '」'], ['"', '"'], ['“', '”']]) {
+    if (s.length > 1 && s.startsWith(open) && s.endsWith(close)) {
+      const inner = s.slice(1, -1);
+      if (!inner.includes(close)) s = inner;
+      break;
+    }
+  }
+  return s.trim();
+}
+
+/* 校正なら長さは大きく変わらないはず。増えていれば言っていないことを足された、
+   減っていれば要約された、とみなす。
+   上限だけ固定の余裕を足すのは、短文では句読点ひとつが効くから。
+   余裕が 8 字なのは、20 字にすると 30 字程度の発言で倍増を見逃すため。
+   下限に余裕を足さないのは、足すと短文で下限が消えて要約を見逃すため。
+   0.4 はフィラーだらけの発言（半分近く消える）を通せる下限。 */
+function plausible(out, src) {
+  const n = [...src].length;
+  const m = [...out].length;
+  return m <= n * 1.3 + 8 && m >= n * 0.4;
+}
+
+/* 戻り値の fellBack は「整形を捨てて文字起こしのまま返した」という意味 */
+async function refine(text) {
+  const body = {
+    model: S.refineModel,
+    temperature: 0,
+    messages: [
+      { role: 'system', content: refinePrompt() },
+      { role: 'user', content: text },
+    ],
+  };
+  // 推論モデルは考えるほど手を入れたがる。校正に推論は要らない。
+  // 対応していないモデルに送ると 400 になるので gpt-oss のときだけ。
+  if (S.refineModel.includes('gpt-oss')) body.reasoning_effort = 'low';
 
   const res = await fetch(`${GROQ}/chat/completions`, {
     method: 'POST',
@@ -447,20 +520,15 @@ async function refine(text) {
       Authorization: `Bearer ${S.apiKey}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model: S.refineModel,
-      temperature: 0,
-      messages: [
-        { role: 'system', content: rules.join('\n') },
-        { role: 'user', content: text },
-      ],
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) throw new Error(await errorMessage(res));
   const json = await res.json();
-  const out = (json.choices?.[0]?.message?.content || '').trim();
-  return out || text;
+  const out = unwrap(json.choices?.[0]?.message?.content || '');
+
+  if (!out || !plausible(out, text)) return { text, fellBack: true };
+  return { text: out, fellBack: false };
 }
 
 async function errorMessage(res) {
@@ -518,7 +586,9 @@ async function transcribeAndShow(item, resolveText, clipboardTried) {
     if (S.refineEnabled && text) {
       els.stage.textContent = 'AI で整形中…';
       try {
-        text = await refine(text);
+        const r = await refine(text);
+        text = r.text;
+        if (r.fellBack) toast('整形が元の発言から離れたので、文字起こしのまま出しました');
       } catch (e) {
         toast('整形をスキップしました: ' + e.message);
       }
