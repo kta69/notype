@@ -1,11 +1,13 @@
 /* NoType — 高精度音声入力 PWA
-   録音 → Groq Whisper large-v3-turbo で文字起こし → 任意で AI 整形 → クリップボード */
+   録音 → Groq Whisper large-v3 で文字起こし → 任意で AI 整形 → クリップボード */
 
 'use strict';
 
 const KEY = 'notype_v1';
 const GROQ = 'https://api.groq.com/openai/v1';
-const ASR_MODEL = 'whisper-large-v3-turbo';
+// turbo は速いが同音異義語に弱く、辞書に「成約」があっても「制約」と書くことがあった。
+// 40 秒の録音で待ち時間の差は 0.4 秒ほどなので、精度を取る。
+const ASR_MODEL = 'whisper-large-v3';
 
 const DEFAULTS = {
   apiKey: '',
@@ -308,10 +310,36 @@ function retryAudio(item) {
 
 /* ---------------- 文字起こし ---------------- */
 
-/* Groq の prompt は 224 トークンまで。長すぎると無視されるか、
-   そのまま出力に混ざる。安全側に切り詰める。 */
+/* 辞書は 1 行に 1 語。「語：説明」か「語（説明）」で説明を付けられる。
+   説明の無い行は、以前の書き方（読点区切りの並び）として読む。 */
+function dictEntries() {
+  const out = [];
+  for (const line of S.vocabulary.split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    const m = t.match(/^(.+?)\s*[：:]\s*(.+)$/) || t.match(/^(.+?)\s*[（(]\s*(.+?)\s*[）)]$/);
+    if (m) {
+      out.push({ word: m[1].trim(), note: m[2].trim() });
+      continue;
+    }
+    for (const w of t.split(/[、,，]/)) {
+      if (w.trim()) out.push({ word: w.trim(), note: '' });
+    }
+  }
+  return out;
+}
+
+/* Whisper の prompt は「直前に話された文」として扱われるので、説明は渡さず語だけ並べる。
+   Groq の prompt は 224 トークンまで。長すぎると無視されるか、
+   そのまま出力に混ざる。語の途中で切れないよう、入るところまでで止める。 */
 function promptTerms() {
-  return S.vocabulary.trim().slice(0, 200);
+  let s = '';
+  for (const { word } of dictEntries()) {
+    const next = s ? s + '、' + word : word;
+    if (next.length > 200) break;
+    s = next;
+  }
+  return s;
 }
 
 async function transcribe(blob) {
@@ -395,6 +423,7 @@ function sanitize(json, terms) {
       if (!usableSegment(seg)) continue;
       const t = (seg.text || '').trim();
       if (!t || norm(t) === prev) continue; // 直前と同一の繰り返しを畳む
+      if (isPromptEcho(t, terms)) continue;
       prev = norm(t);
       kept.push(t);
     }
@@ -409,8 +438,19 @@ function sanitize(json, terms) {
   if (terms) {
     if (norm(text) === norm(terms)) return '';
     if (text.startsWith(terms)) text = text.slice(terms.length).trim();
+    if (isPromptEcho(text, terms)) return '';
   }
   return text;
+}
+
+/* 雑音だけの録音では、辞書の語を一部だけ並べて返してくる（全文一致の判定をすり抜ける）。
+   辞書の語 2 つ以上だけでできていたら吐き戻しとみなす。
+   1 語だけなら、本当にその語だけを喋った可能性があるので残す。 */
+function isPromptEcho(text, terms) {
+  if (!terms) return false;
+  const words = new Set(terms.split('、').map(norm).filter(Boolean));
+  const parts = text.split(/[、,，。\s]+/).map(norm).filter(Boolean);
+  return parts.length >= 2 && parts.every(p => words.has(p));
 }
 
 /* 日本語の文字どうしに挟まった半角スペースを除去する */
@@ -423,37 +463,60 @@ function clean(text) {
 
 /* ---------------- AI 整形 ---------------- */
 
-/* 書き直しではなく校正を頼む指示。足すことを一つずつ禁じてある。 */
+/* 書き直しではなく校正を頼む指示。仕事は変換ミスの修正に絞り、足すことは一つずつ禁じてある。
+   ・「同音異義語を直す」と書くだけでは、読みの違う語に言い換えた（制約→契約、以外と→思ったより）。
+     「読みが同じ語だけ」と縛り、例を付けて初めて止まった
+   ・人名の決まりが無いと、似た名前が文中にあるとき片方にそろえてしまった
+   ・辞書の説明は「似た音の名前のどちらか」を話の流れで選ばせるためのもの */
 function refinePrompt() {
   const rules = [
-    'あなたは日本語の音声認識テキストの校正者です。入力は音声認識の生テキストです。',
-    '文章を書き直すのではなく、明らかな誤りだけを直してください。出力は修正後の本文だけです。',
+    'あなたは日本語の音声認識テキストの校正者です。入力は話者の発言を音声認識した生テキストです。',
+    '文章を書き直すのではなく、認識の誤りだけを直してください。出力は修正後の本文だけです。',
     '',
-    '直してよいもの:',
-    '- 同音異義語や誤変換を、文脈から正しい表記に直す',
+    '# いちばん大事な仕事: 変換ミスを直す',
+    '音声認識は、読みが同じ別の漢字の語によく化けます。',
+    '文中の漢字の語を一つずつ、話の流れに合っているか確かめてください。',
+    '合っていなければ、読みが同じで流れに合う語に直します。',
+    '- 例: 営業の話で「2件制約できた」「制約率」→「2件成約できた」「成約率」（せいやく）',
+    '- 例: 「以外と早く」→「意外と早く」（いがい）、「提案の機械」→「提案の機会」（きかい）',
+    '置き換えてよいのは読みが同じ語だけです。意味の近い別の語に言い換えないこと（「制約」を「契約」や「制限」にしない）。',
+    '流れに合っている語は直さないこと。「時間の制約」は「制約」のままです。',
+    '同じ誤りが何度か出てくるときは、全部直します。',
+    '音声認識が間違えるのは漢字の語と名前です。ひらがなの部分（活用・助詞・語尾）はほぼ正しく聞き取れているので変えないこと。',
+    '漢字の語を直したときに送り仮名が変わるのはかまいません（「家に変えた」→「家に帰った」）。',
+    '',
+    '# ほかに直してよいもの',
     '- 句読点と改行を補う',
-    '- 英数字・固有名詞の表記を整える',
+    '- 英数字の表記を整える',
     '',
-    'してはいけないこと:',
+    '# してはいけないこと',
     '- 文・節・語句を新しく足す。読みやすくするための補足も禁止',
-    '- 語尾や言い回しを変える。話し言葉は話し言葉のまま残す',
-    '- 助詞を補う。「ご飯作って」を「ご飯を作って」にしない',
+    '- 語尾・活用・言い回しを変える。「来て、」を「来た、」にしない。話し言葉は話し言葉のまま残す',
+    '- 助詞を足したり削ったりする。「ご飯作って」を「ご飯を作って」にしない。「全部は」の「は」も残す',
     '- 文法やら抜き言葉を正す。「起きれた」は「起きれた」のまま',
     '- 言い換え、要約、意訳、敬体と常体の変更',
     '- 言い差しや途中で終わった文を補って完成させる。不完全なまま残すこと',
-    '- 事実・数字・日付・固有名詞を推測で補う',
+    '- 事実・数字・日付を推測で補う',
+    '- 人名を変える。下の辞書にある名前に直すとき以外は、似た名前が文中にあってもそろえない',
     '- 前置き、後書き、見出し、箇条書きへの整理、引用符、コードブロック',
     '',
     '入力が短ければ出力も短いままにします。直すところが無ければ入力をそのまま返してください。',
   ];
   if (S.removeFillers) {
-    rules.push('「えー」「あの」「まあ」などのフィラーと、明らかな言い直しは削除してください。');
+    rules.push('「えー」「えっと」「あの」「まあ」などのフィラーと、明らかな言い直しは削除してください。');
   }
-  const terms = S.vocabulary.trim();
-  if (terms) {
-    rules.push('');
-    rules.push('以下は話者がよく使う固有名詞・専門用語です。該当しそうな箇所はこの表記に合わせること。');
-    rules.push(terms);
+  const dict = dictEntries();
+  if (dict.length) {
+    rules.push('', '# 話者の辞書（表記：説明）');
+    for (const { word, note } of dict) rules.push(note ? `${word}：${note}` : word);
+    rules.push(
+      '',
+      '辞書の語は、音声認識ではカタカナとひらがなの揺れや、似た音の別の語になって出てきます。',
+      '説明と話の流れから、どの語のことかを判断して辞書の表記に直してください。',
+      '辞書に似た音の名前が複数あるときは、文の内容がどちらの説明に合うかで選びます。',
+      '辞書の名前どうしでも取り違えは起きます。たとえば友達の名前で出てきたのに、',
+      '内容が小さな子どもの話（保育園、初めて歩いた など）なら、子どもの名前の誤認識です。',
+    );
   }
   return rules.join('\n');
 }
@@ -510,9 +573,11 @@ async function refine(text) {
       { role: 'user', content: text },
     ],
   };
-  // 推論モデルは考えるほど手を入れたがる。校正に推論は要らない。
+  // low だと名前の取り違えを話の流れで直せない（子どもの話なのに友達の名前のまま残す、
+  // 逆に「友達の子どもが生まれた」の友達を子どもの名前に変える）。
+  // medium でも禁止事項（語尾・助詞・ら抜き）は守られた。代わりに 40 秒の録音で 2 秒ほど遅くなる。
   // 対応していないモデルに送ると 400 になるので gpt-oss のときだけ。
-  if (S.refineModel.includes('gpt-oss')) body.reasoning_effort = 'low';
+  if (S.refineModel.includes('gpt-oss')) body.reasoning_effort = 'medium';
 
   const res = await fetch(`${GROQ}/chat/completions`, {
     method: 'POST',
